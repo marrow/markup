@@ -1,0 +1,57 @@
+h1(#title). Marrow Texting
+
+bq(subtitle). A modern, Pythonic, and extensible text processing engine
+syntactically similar to Textile designed for package documentation
+generation.
+
+bq(byline). (C) 2011, Alice Bevan-McGregor
+
+bq(byline). "https://github.com/marrow/marrow.texting":github-project
+
+[github-project]https://github.com/marrow/marrow.texting
+
+
+
+h2(#what-is). %1.% What is Marrow Texting?
+
+# A numbered list.
+# With several numbers.
+
+* A bulleted list.
+* With several items.
+** And even some indentation.
+* Testing.
+
+: A new list type.
+    : With indented sub-lists!
+: Who knew?
+
+
+A definition:
+    Possibly for a definition list.
+A second definition:
+    Another definition of this definition.
+
+
+
+h2(#installation). %2.% Installation
+
+Installing @marrow.texting@ is easy, just execute the following in a terminal:
+
+code(shell).
+pip install marrow.texting
+
+If you add @marrow.texting@ to the @install_requires@ argument of the call to
+@setup()@ in your application's @setup.py@ file, @marrow.texting@ will be
+automatically installed and made available when your own application is
+installed.
+
+    Example (inferred) block quote.
+    
+    This one goes across several lines.
+
+    This should be a new block quote.
+
+code(python).
+def foo(self):
+    pass
