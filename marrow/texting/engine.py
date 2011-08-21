@@ -71,8 +71,8 @@ class Parser(object):
     def __call__(self, *args, **kw):
         self.input.seek(0)
         
-        signature, remainder = self.signature('first.')
-        chunks = self.chunks
+        signature, remainder = self._signature('first.')
+        chunks = self._chunks
         
         while True:
             if not signature.sticky:
@@ -92,14 +92,14 @@ class Parser(object):
                 if __[0] in self.lists:
                     _ = __
                 else:
-                    signature, remainder = self.signature('bq.')
+                    signature, remainder = self._signature('bq.')
             
             for block, validate in self.registry.tokens:
                 if validate(_, chunk):
-                    signature, remainder = self.signature(block + '.')
+                    signature, remainder = self._signature(block + '.')
             
             else:
-                _ = self.signature(_)
+                _ = self._signature(_)
                 
                 if _:
                     signature, remainder = _
@@ -110,7 +110,7 @@ class Parser(object):
                         del chunk[0]
             
             if not signature:
-                signature, remainder = self.signature('p.')
+                signature, remainder = self._signature('p.')
             
             # print("Signature: ", signature, "\n", "Chunk: ", pformat(chunk), sep="", end="\n\n")
             
@@ -119,8 +119,8 @@ class Parser(object):
             
             processor = getattr(self, signature.block, None)
             if not processor:
-                processor = self.default
-                chunk = self.unformat(chunk)
+                processor = self._default
+                chunk = self._unformat(chunk)
             
             result = processor(chunk, signature=signature)
             
@@ -128,7 +128,7 @@ class Parser(object):
                 yield result
     
     @property
-    def chunks(self):
+    def _chunks(self):
         # Read until we reach a blank line or a line with leading whitespace.
         chunk = []
         
@@ -157,7 +157,7 @@ class Parser(object):
         
         if chunk: yield chunk
     
-    def signature(self, line):
+    def _signature(self, line):
         """Determine if this line is a block signature.
         
         Valid block signature format:
@@ -226,7 +226,7 @@ class Parser(object):
                 continuous = continuous
             ), remainder
     
-    def unformat(self, chunk, *args, **kw):
+    def _unformat(self, chunk, *args, **kw):
         text = " ".join(chunk).format(*args, **kw)
         
         for i in self.replacements:
@@ -237,17 +237,20 @@ class Parser(object):
         
         return text
     
-    def format(self, text):
+    def _format(self, text):
         # Perform inline element expantion.
+        
+        
+        
         return text
     
-    def default(self, text, signature):
+    def _default(self, text, signature):
         node = getattr(tag, self.short.get(signature.block, signature.block))()
         return node(
                 id_ = signature.id or None,
                 class_ = ' '.join(signature.classes) or None,
                 style = '; '.join(signature.styles) or None
-            )[ self.format(text) ]
+            )[ self._format(text) ]
     
     def list(self, chunk, signature, kind='ul'):
         parent = getattr(tag, kind)
@@ -334,7 +337,10 @@ class Parser(object):
                 id_ = signature.id or None,
                 class_ = ' '.join(signature.classes) or None,
                 style = '; '.join(signature.styles) or None
-            )[ ( tag.p[self.format(p)] for p in paragraphs ) ]
+            )[ ( tag.p[self._format(p)] for p in paragraphs ) if len(paragraphs) > 1 else self._format(paragraphs[0]) ]
+    
+    def page(self, chunk, signature):
+        return "\f"
 
 
 def main():
