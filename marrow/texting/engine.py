@@ -20,32 +20,94 @@ class Signature(Bunch):
                 ((', class="' + ', '.join(self.classes) + '"') if self.classes else '') + ')'
 
 
-class Registry(object):
+class BlockRegistry(object):
     def __init__(self):
         self.tokens = []
-    
-    def __call__(self, block):
-        def inner(fn):
-            self.register(block, fn)
-            return fn
     
     def register(self, block, fn):
         self.tokens.append((block, fn))
 
 
+class InlineRegistry(object):
+    def __init__(self):
+        self.tokens = dict()
+    
+    def register(self, symbol, tag):
+        if not isinstance(symbol, tuple):
+            symbol = (symbol, symbol)
+        
+        self.tokens[symbol] = tag
+
+
 class Parser(object):
-    registry = Registry()
+    """
     
-    registry.register('ol', lambda _, __: _[0] == '#')
-    registry.register('ul', lambda _, __: _[0] in ('*', '-'))
-    registry.register('menu', lambda _, __: _[0] == ':')
-    registry.register('dl', lambda _, __: _[-1] == ':' and len(__) > 1 and __[1][0] in (' ', '\t'))
-    registry.register('table', lambda _, __: _[0] == _[-1] == '|')
-    registry.register('link', lambda _, __: _[0] == '[' and ']' in _ and '/' in _ and ' ' not in _)
+    *bold text*
+    _italic text_
+    *_bold italic text_*
+    -strikethrough text-
+    *-bold strikethrough text-*
+    *_-bold italic strikethrough text-_*
+    +underlined text+
+    *+bold underlined text+*
+    _+italic underlined text+_
+    *_+bold italic underlined text+_*
+    *_-+bold italic strikethrough underlined text+-_*
+    %{font-size:18pt}font size%
+    %{color:red}text in red%
+    Brand ^TM^
+    Text ~subscript~
     
-    replacements = {
-            '\'': ('‘', '’'),
-            '\"': ('“', '”'),
+    # Chapter 1
+    * bulleted list
+    
+    |Table | with two columns |
+    
+    "Link to Wikipedia":http://www.wikipedia.org
+    
+    !http://commons.wikimedia.org/wiki/Special:Filepath/Wikipedia-logo-en.png!
+    
+    fn1. footnote
+    
+    ABC(Always Be Closing)
+    
+    [n]
+    
+    """
+    
+    _blocks = BlockRegistry()
+    
+    _blocks.register('ol', lambda _, __: _[0] == '#')
+    _blocks.register('ul', lambda _, __: _[0] in ('*', '-'))
+    _blocks.register('menu', lambda _, __: _[0] == ':')
+    _blocks.register('dl', lambda _, __: _[-1] == ':' and len(__) > 1 and __[1][0] in (' ', '\t'))
+    _blocks.register('table', lambda _, __: _[0] == _[-1] == '|')
+    _blocks.register('link', lambda _, __: _[0] == '[' and ']' in _ and '/' in _ and ' ' not in _)
+    
+    _inline = InlineRegistry()
+    
+    _inline.register('%', tag.span)
+    _inline.register('@', tag.code)
+    _inline.register('*', tag.strong)
+    _inline.register('_', tag.em)
+    _inline.register('-', tag.del_)
+    _inline.register('+', tag.ins)
+    _inline.register('^', tag.sup)
+    _inline.register('~', tag.sub)
+    _inline.register('??', tag.cite)
+    # _inline.register('"', lambda t: (None, '“' + t[1:-1] + '”'))
+    # _inline.register("'", lambda t: (None, '‘' + t[1:-1] + '’'))
+    
+    def _footnote(self, text):
+        if not text.isdigit():
+            self._footnotes.append(text)
+            text = str(len(self._footnotes))
+        
+        return tag.sup [ tag.a ( href = '#fn' + text ) [ text ] ], None
+    
+    _inline.register(('[', ']'), _footnote)
+    
+    _replacements = {
             '-': '–',
             '--': '—',
             '(c)': "©",
@@ -53,23 +115,25 @@ class Parser(object):
             '(r)': "®",
             '(R)': "®",
             '(tm)': "™",
-            '(TM)': "™"
+            '(TM)': "™",
+            '...': '…',
+            ' x ': '×'
         }
     
-    short = dict(
+    _short = dict(
             bq = "blockquote",
         )
     
-    lists = ('#', '*', '-', ':')
+    _lists = ('#', '*', '-', ':')
     
     def __init__(self, input, encoding='utf-8'):
-        self.input = StringIO(input) if isinstance(input, unicode) else input
-        self.encoding = encoding
-        self.footnoes = []
-        self.links = dict()
+        self._input = StringIO(input) if isinstance(input, unicode) else input
+        self._encoding = encoding
+        self._footnotes = []
+        self._links = dict()
     
     def __call__(self, *args, **kw):
-        self.input.seek(0)
+        self._input.seek(0)
         
         signature, remainder = self._signature('first.')
         chunks = self._chunks
@@ -89,12 +153,12 @@ class Parser(object):
                 # Leading whitespace trumps all else.
                 # Possibilities: block quote, lists. (\s+\w = quote, \s+[*#-] = list)
                 __ = _.lstrip()
-                if __[0] in self.lists:
+                if __[0] in self._lists:
                     _ = __
                 else:
                     signature, remainder = self._signature('bq.')
             
-            for block, validate in self.registry.tokens:
+            for block, validate in self._blocks.tokens:
                 if validate(_, chunk):
                     signature, remainder = self._signature(block + '.')
             
@@ -132,9 +196,9 @@ class Parser(object):
         # Read until we reach a blank line or a line with leading whitespace.
         chunk = []
         
-        for line in (l.rstrip('\n') for l in self.input):
+        for line in (l.rstrip('\n') for l in self._input):
             if not isinstance(line, unicode):
-                line = line.decode(self.encoding)
+                line = line.decode(self._encoding)
             
             if not chunk and line:
                 # print("Appending initial line.")
@@ -229,23 +293,73 @@ class Parser(object):
     def _unformat(self, chunk, *args, **kw):
         text = " ".join(chunk).format(*args, **kw)
         
-        for i in self.replacements:
-            if isinstance(self.replacements[i], tuple):
-                continue # we can't handle these yet
-            
-            text = text.replace(i, self.replacements[i])
+        for i in self._replacements:
+            text = text.replace(i, self._replacements[i])
         
         return text
     
     def _format(self, text):
-        # Perform inline element expantion.
+        """Perform inline element expantion."""
         
+        text = text.strip() + ' '
         
+        # Now do everything else.
         
-        return text
+        generated = []
+        stack = [('', tag.span(strip=True), [])] # (expects, node)
+        tokens = dict((i[0], (i[1], self._inline.tokens[i])) for i in self._inline.tokens)
+        last = 0
+        
+        for i, char in enumerate(text):
+            if last > i: continue
+            
+            # First we determine if we're closing an existing element from the stack.
+            if stack and char in stack[-1][0] and (not i or text[i-1] != '\\'):
+                # Pop off the stack; this node is already a child of the parent.
+                expect, token, children = stack.pop()
+                
+                children.append(text[last:i])
+                last = i + 1
+                
+                token = token() [ children ]
+                stack[-1][2].append(token)
+                
+                continue
+            
+            # Now we determine if we're going deeper into the stack.
+            if char in tokens and (not i or text[i-1] != '\\'):
+                if char in (i[0] for i in stack) and text.find(char, i+1) == -1:
+                    # pre-mature close
+                    pass
+                
+                if text.find(tokens[char][0], i+1) == -1:
+                    continue
+                
+                stack[-1][2].append(text[last:i])
+                last = i + 1
+                
+                expect, token = tokens[char]
+                stack.append((expect, token, []))
+                
+                continue
+        
+        # Compress the stack.
+        while len(stack) > 1:
+            expect, token, children = stack.pop()
+            token = token()
+            token.children.extend(children)
+            
+            stack[-1][2].append(token)
+        
+        expect, token, children = stack.pop()
+        children.append(text[last:])
+        token = token()
+        token.children.extend(children)
+        
+        return token
     
     def _default(self, text, signature):
-        node = getattr(tag, self.short.get(signature.block, signature.block))()
+        node = getattr(tag, self._short.get(signature.block, signature.block))()
         return node(
                 id_ = signature.id or None,
                 class_ = ' '.join(signature.classes) or None,
@@ -307,7 +421,7 @@ class Parser(object):
         return self.list(chunk, signature, 'menu')
     
     def dl(self, chunk, signature):
-        return "DEFINITION LIST"
+        return "DEFINITION LIST\n"
     
     def pre(self, chunk, signature):
         return tag.pre(
@@ -324,20 +438,28 @@ class Parser(object):
     
     def link(self, chunk, signature):
         name, _, link = chunk[0][1:].partition(']')
-        self.links[name] = link
+        self._links[name] = link
         return ""
     
     def flush(self, chunk, signature):
         return tag.flush
     
     def bq(self, chunk, signature):
-        paragraphs = [i.strip() for i in chunk if i.strip()]
+        paragraphs = [[]]
+        
+        for line in chunk:
+            if not line.strip():
+                paragraphs.append([])
+                continue
+            
+            paragraphs[-1].append(line)
         
         return tag.blockquote(
                 id_ = signature.id or None,
                 class_ = ' '.join(signature.classes) or None,
                 style = '; '.join(signature.styles) or None
-            )[ ( tag.p[self._format(p)] for p in paragraphs ) if len(paragraphs) > 1 else self._format(paragraphs[0]) ]
+            )[ ( tag.p[self._format(self._unformat(p))] for p in paragraphs ) \
+                    if len(paragraphs) > 1 else self._format(self._unformat(paragraphs[0])) ]
     
     def page(self, chunk, signature):
         return "\f"
@@ -356,6 +478,13 @@ def main():
                     texting()
                 ]
             ]).encode('utf-8'))
+
+
+def main2():
+    texting = Parser("")
+    
+    print(unicode(texting._format("test *two* _bar_")))
+
 
 if __name__ == '__main__':
     main()
