@@ -28,53 +28,123 @@ class BlockRegistry(object):
         self.tokens.append((block, fn))
 
 
+class InlineToken(object):
+    def __repr__(self):
+        return "Token(%s)" % (self.tag, )
+    
+    def __init__(self, start, end=None, tag=None):
+        super(InlineToken, self).__init__()
+        
+        self.start = start
+        self.end = end if end else start
+        self.tag = tag
+    
+    def validate(self, stream):
+        return stream[0] == self.start and stream.find(self.end, 1) > 1
+    
+    def enter(self, stream):
+        yield stream
+        yield ('enter', self.tag)
+    
+    def exit(self, stream):
+        yield stream
+        yield ('exit', self.tag)
+
+
+class LongInlineToken(InlineToken):
+    def validate(self, stream):
+        return stream.startswith(self.start) and stream.find(self.end, len(self.start)) > 0
+
+
+class UnformattedToken(LongInlineToken):
+    """No substitutions should appear within this token."""
+    
+    def enter(self, stream):
+        end = 0
+        while True:
+            end = stream.index(self.end, end + 1)
+            if stream[end-1] != '\\':
+                break
+            
+            stream = stream[:end-1] + stream[end:]
+            end -= 1
+        
+        yield stream[end:]
+        yield ('enter', self.tag)
+        yield ('text', stream[:end])
+    
+    def exit(self, stream):
+        yield stream
+        yield ('exit', self.tag)
+
+
+class LinkToken(InlineToken):
+    """No substitutions should appear within this token."""
+    
+    def enter(self, stream):
+        yield stream
+        yield ('enter', self.tag)
+    
+    def exit(self, stream):
+        linkbreak = string.ascii_letters + string.digits + '.-_:/@#'
+        
+        for i, c in enumerate(stream):
+            if c not in linkbreak:
+                yield stream[i:]
+                break
+        
+        else:
+            yield ""
+            yield ('attr', ('href', stream))
+        
+        yield ('exit', self.tag)
+
+
+class FootnoteToken(InlineToken):
+    def enter(self, stream):
+        end = 0
+        while True:
+            end = stream.index(self.end, end + 1)
+            if stream[end-1] != '\\':
+                break
+            
+            stream = stream[:end-1] + stream[end:]
+            end -= 1
+        
+        fn = stream[:end]
+        if not fn.isdigit():
+            # TODO: Store the footnote in the current parser and get index.
+            fn = '0'
+        
+        yield stream[end:]
+        yield ('enter', 'sup')
+        yield ('enter', 'a')
+        yield ('attr', ('href', '#fn' + fn))
+        yield ('text', fn)
+    
+    def exit(self, stream):
+        yield stream
+        yield ('exit', 'a')
+        yield ('exit', 'sup')
+
+
 class InlineRegistry(object):
     def __init__(self):
+        super(InlineRegistry, self).__init__()
         self.tokens = dict()
     
-    def register(self, symbol, tag):
-        if not isinstance(symbol, tuple):
-            symbol = (symbol, symbol)
+    def register(self, token, symbol=None):
+        if symbol:
+            start, end = (symbol if isinstance(symbol, tuple) == 2 else (symbol, None))
+            token = InlineToken(start, end, token) if len(start) == 1 else LongInlineToken(start, end, token)
         
-        self.tokens[symbol] = tag
+        if token.start[0] not in self.tokens:
+            self.tokens[token.start[0]] = []
+        
+        self.tokens[token.start[0]].append(token)
 
 
 class Parser(object):
-    """
-    
-    *bold text*
-    _italic text_
-    *_bold italic text_*
-    -strikethrough text-
-    *-bold strikethrough text-*
-    *_-bold italic strikethrough text-_*
-    +underlined text+
-    *+bold underlined text+*
-    _+italic underlined text+_
-    *_+bold italic underlined text+_*
-    *_-+bold italic strikethrough underlined text+-_*
-    %{font-size:18pt}font size%
-    %{color:red}text in red%
-    Brand ^TM^
-    Text ~subscript~
-    
-    # Chapter 1
-    * bulleted list
-    
-    |Table | with two columns |
-    
-    "Link to Wikipedia":http://www.wikipedia.org
-    
-    !http://commons.wikimedia.org/wiki/Special:Filepath/Wikipedia-logo-en.png!
-    
-    fn1. footnote
-    
-    ABC(Always Be Closing)
-    
-    [n]
-    
-    """
-    
     _blocks = BlockRegistry()
     
     _blocks.register('ol', lambda _, __: _[0] == '#')
@@ -86,30 +156,23 @@ class Parser(object):
     
     _inline = InlineRegistry()
     
-    _inline.register('%', tag.span)
-    _inline.register('@', tag.code)
-    _inline.register('*', tag.strong)
-    _inline.register('_', tag.em)
-    _inline.register('-', tag.del_)
-    _inline.register('+', tag.ins)
-    _inline.register('^', tag.sup)
-    _inline.register('~', tag.sub)
-    _inline.register('??', tag.cite)
-    # _inline.register('"', lambda t: (None, '“' + t[1:-1] + '”'))
-    # _inline.register("'", lambda t: (None, '‘' + t[1:-1] + '’'))
-    
-    def _footnote(self, text):
-        if not text.isdigit():
-            self._footnotes.append(text)
-            text = str(len(self._footnotes))
-        
-        return tag.sup [ tag.a ( href = '#fn' + text ) [ text ] ], None
-    
-    _inline.register(('[', ']'), _footnote)
+    _inline.register(tag.strong, '*')
+    _inline.register(tag.em, '_')
+    _inline.register(tag.del_, '-')
+    _inline.register(tag.ins, '+')
+    _inline.register(tag.span, '%')
+    _inline.register(tag.sup, '^')
+    _inline.register(tag.sub, '~')
+    _inline.register(tag.cite, '??')
+    _inline.register(tag.b, '**')
+    _inline.register(tag.i, '__')
+    _inline.register(UnformattedToken('@', tag=tag.code))
+    _inline.register(LinkToken('"', '":', tag=tag.a))
+    _inline.register(FootnoteToken('[', ']'))
     
     _replacements = {
-            '-': '–',
-            '--': '—',
+            ' - ': '–',
+            ' -- ': '—',
             '(c)': "©",
             '(C)': "©",
             '(r)': "®",
@@ -131,6 +194,11 @@ class Parser(object):
         self._encoding = encoding
         self._footnotes = []
         self._links = dict()
+    
+    def render(self, *args, **kw):
+        root = tag.div(strip=True)
+        root.children = list(self(*args, **kw))
+        return unicode(root)
     
     def __call__(self, *args, **kw):
         self._input.seek(0)
@@ -176,8 +244,6 @@ class Parser(object):
             if not signature:
                 signature, remainder = self._signature('p.')
             
-            # print("Signature: ", signature, "\n", "Chunk: ", pformat(chunk), sep="", end="\n\n")
-            
             if signature.block[0] == '_':
                 raise Exception("Invalid block; stop trying to mess with the parser!")
             
@@ -201,22 +267,17 @@ class Parser(object):
                 line = line.decode(self._encoding)
             
             if not chunk and line:
-                # print("Appending initial line.")
                 chunk.append(line)
                 continue
             
             if not line:
-                # print("Empty line.")
-                
                 if not chunk:
-                    # print("No chunk.")
                     continue
                 
                 yield chunk
                 chunk = []
                 continue
             
-            # print("Appending chunk.")
             chunk.append(line)
         
         if chunk: yield chunk
@@ -301,62 +362,106 @@ class Parser(object):
     def _format(self, text):
         """Perform inline element expantion."""
         
-        text = text.strip() + ' '
-        
-        # Now do everything else.
-        
-        generated = []
-        stack = [('', tag.span(strip=True), [])] # (expects, node)
-        tokens = dict((i[0], (i[1], self._inline.tokens[i])) for i in self._inline.tokens)
-        last = 0
-        
-        for i, char in enumerate(text):
-            if last > i: continue
+        def tokenize(source):
+            source = source
             
-            # First we determine if we're closing an existing element from the stack.
-            if stack and char in stack[-1][0] and (not i or text[i-1] != '\\'):
-                # Pop off the stack; this node is already a child of the parent.
-                expect, token, children = stack.pop()
-                
-                children.append(text[last:i])
-                last = i + 1
-                
-                token = token() [ children ]
-                stack[-1][2].append(token)
-                
-                continue
+            stack = []
+            tokens = self._inline.tokens
             
-            # Now we determine if we're going deeper into the stack.
-            if char in tokens and (not i or text[i-1] != '\\'):
-                if char in (i[0] for i in stack) and text.find(char, i+1) == -1:
-                    # pre-mature close
-                    pass
+            while source:
+                for i, char in enumerate(source):
+                    token = stack[-1] if stack else None
+                    
+                    if token and source.find(token.end) == i:
+                        if i > 0:
+                            if source[i-1] == '\\':
+                                yield 'text', source[:i-2] + char
+                                source = source[:i]
+                                break
+                            
+                            yield 'text', source[:i]
+                            source = source[i:]
+                        
+                        emitter = token.exit(source[len(token.end):])
+                        source = emitter.next()
+                        
+                        for chunk in emitter:
+                            if chunk[0] == 'enter':
+                                stack.append(token)
+                            if chunk[0] == 'exit':
+                                stack.pop()
+                            
+                            yield chunk
+                        
+                        break
+                    
+                    if char not in tokens:
+                        continue
+                    
+                    remainder = source if i == 0 else source[i:]
+                    
+                    for token in tokens[char]:
+                        if token.validate(remainder):
+                            break
+                    else:
+                        continue
+                    
+                    if i > 0:
+                        if source[i-1] == '\\':
+                            yield 'text', source[:i-1] + char
+                            source = source[i+1:]
+                            break
+                        
+                        yield 'text', source[:i]
+                        source = remainder
+                    
+                    emitter = token.enter(source[len(token.start):])
+                    source = emitter.next()
+                    
+                    for chunk in emitter:
+                        if chunk[0] == 'enter':
+                            stack.append(token)
+                        elif chunk[0] == 'exit':
+                            stack.pop()
+                        
+                        yield chunk
+                    
+                    break
                 
-                if text.find(tokens[char][0], i+1) == -1:
-                    continue
-                
-                stack[-1][2].append(text[last:i])
-                last = i + 1
-                
-                expect, token = tokens[char]
-                stack.append((expect, token, []))
-                
-                continue
+                if source and i == len(source) - 1:
+                    yield 'text', source
+                    break
         
-        # Compress the stack.
-        while len(stack) > 1:
-            expect, token, children = stack.pop()
-            token = token()
-            token.children.extend(children)
+        stack = [tag.span(strip=True)]
+        
+        for action, value in tokenize(text):
+            if action == 'enter':
+                value = value()
+                stack[-1].children.append(value)
+                stack.append(value)
             
-            stack[-1][2].append(token)
+            elif action == 'exit':
+                stack.pop()
+            
+            elif action == 'attr':
+                name, value = value
+                if name == 'href':
+                    if value[0] not in ('#', '/') and '://' not in value:
+                        
+                        value = self._get_link(value)
+                
+                stack[-1].attrs[name] = value
+            
+            else:
+                stack[-1].children.append(value)
         
-        expect, token, children = stack.pop()
-        children.append(text[last:])
-        token = token()
-        token.children.extend(children)
+        return stack[0]
+    
+    def _get_link(self, name):
+        def inner(context):
+            return self._links[name]
         
-        return token
+        return inner
     
     def _default(self, text, signature):
         node = getattr(tag, self._short.get(signature.block, signature.block))()
@@ -421,7 +526,15 @@ class Parser(object):
         return self.list(chunk, signature, 'menu')
     
     def dl(self, chunk, signature):
-        return "DEFINITION LIST\n"
+        dl = tag.dl()
+        
+        for line in chunk:
+            if line[0] not in (' ', '\t'):
+                dl.children.append(tag.dt[line])
+            else:
+                dl.children.append(tag.dd[line.lstrip()])
+        
+        return dl
     
     def pre(self, chunk, signature):
         return tag.pre(
@@ -467,7 +580,7 @@ class Parser(object):
 
 def main():
     texting = Parser(open('../../test.text', 'r'))
-    print(unicode(tag.div[texting()]))
+    print(texting.render())
     
     with open('test.html', 'w') as fh:
         fh.write(unicode(tag.html [
@@ -475,15 +588,9 @@ def main():
                     tag.title [ "Texting Test" ]
                 ],
                 tag.body [
-                    texting()
+                    list(texting())
                 ]
             ]).encode('utf-8'))
-
-
-def main2():
-    texting = Parser("")
-    
-    print(unicode(texting._format("test *two* _bar_")))
 
 
 if __name__ == '__main__':
