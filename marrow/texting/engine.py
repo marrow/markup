@@ -44,11 +44,11 @@ class InlineToken(object):
     
     def enter(self, stream):
         yield stream
-        yield ('enter', self.tag)
+        yield ('enter', self.tag())
     
     def exit(self, stream):
         yield stream
-        yield ('exit', self.tag)
+        yield ('exit', None)
 
 
 class LongInlineToken(InlineToken):
@@ -70,20 +70,21 @@ class UnformattedToken(LongInlineToken):
             end -= 1
         
         yield stream[end:]
-        yield ('enter', self.tag)
+        yield ('enter', self.tag())
         yield ('text', stream[:end])
     
     def exit(self, stream):
         yield stream
-        yield ('exit', self.tag)
+        yield ('exit', None)
 
 
 class LinkToken(InlineToken):
     """No substitutions should appear within this token."""
     
     def enter(self, stream):
+        #print("Entering link: {0!r}".format(stream))
         yield stream
-        yield ('enter', self.tag)
+        yield ('enter', self.tag())
     
     def exit(self, stream):
         linkbreak = string.ascii_letters + string.digits + '.-_:/@#'
@@ -91,13 +92,19 @@ class LinkToken(InlineToken):
         for i, c in enumerate(stream):
             if c not in linkbreak:
                 yield stream[i:]
+                yield ('attr', ('href', stream[:i]))
                 break
         
         else:
-            yield ""
-            yield ('attr', ('href', stream))
+            if stream[-1] == '.':
+                yield '.'
+                yield ('attr', ('href', stream[:-1]))
+            
+            else:
+                yield ""
+                yield ('attr', ('href', stream))
         
-        yield ('exit', self.tag)
+        yield ('exit', None)
 
 
 class FootnoteToken(InlineToken):
@@ -117,15 +124,16 @@ class FootnoteToken(InlineToken):
             fn = '0'
         
         yield stream[end:]
-        yield ('enter', 'sup')
-        yield ('enter', 'a')
+        yield ('enter', tag.sup())
+        yield ('enter', tag.a())
         yield ('attr', ('href', '#fn' + fn))
+        yield ('attr', ('rel', 'footnote'))
         yield ('text', fn)
     
     def exit(self, stream):
         yield stream
-        yield ('exit', 'a')
-        yield ('exit', 'sup')
+        yield ('exit', None) # a
+        yield ('exit', None) # sup
 
 
 class InlineRegistry(object):
@@ -153,13 +161,14 @@ class Parser(object):
     _blocks.register('dl', lambda _, __: _[-1] == ':' and len(__) > 1 and __[1][0] in (' ', '\t'))
     _blocks.register('table', lambda _, __: _[0] == _[-1] == '|')
     _blocks.register('link', lambda _, __: _[0] == '[' and ']' in _ and '/' in _ and ' ' not in _)
+    _blocks.register('footnote', lambda _, __: _[:2] == 'fn' and _.split('.', 1)[0][2:].isdigit())
     
     _inline = InlineRegistry()
     
     _inline.register(tag.strong, '*')
     _inline.register(tag.em, '_')
-    _inline.register(tag.del_, '-')
-    _inline.register(tag.ins, '+')
+    #_inline.register(tag.del_, '-')
+    #_inline.register(tag.ins, '+')
     _inline.register(tag.span, '%')
     _inline.register(tag.sup, '^')
     _inline.register(tag.sub, '~')
@@ -190,7 +199,7 @@ class Parser(object):
     _lists = ('#', '*', '-', ':')
     
     def __init__(self, input, encoding='utf-8'):
-        self._input = StringIO(input) if isinstance(input, unicode) else input
+        self._input = StringIO(input.encode('utf8')) if isinstance(input, unicode) else input
         self._encoding = encoding
         self._footnotes = []
         self._links = dict()
@@ -207,13 +216,15 @@ class Parser(object):
         chunks = self._chunks
         
         while True:
-            if not signature.sticky:
+            if signature and not signature.sticky:
                 signature = None
             
             try:
                 chunk = chunks.next()
             except StopIteration:
                 return
+            
+            #print("Chunk: {0!r}".format(chunk))
             
             _ = chunk[0]
             
@@ -229,9 +240,12 @@ class Parser(object):
             for block, validate in self._blocks.tokens:
                 if validate(_, chunk):
                     signature, remainder = self._signature(block + '.')
+                    #print("Signature match:", signature)
+                    break
             
             else:
                 _ = self._signature(_)
+                #print("Default signature:", _)
                 
                 if _:
                     signature, remainder = _
@@ -300,37 +314,42 @@ class Parser(object):
         sticky = False
         continuous = False
         
-        line, _, remainder = line.partition('.')
+        block, _, remainder = line.partition('.')
         remainder = remainder.lstrip()
         
-        if not _ or line[0] in (' ', '\t'):
+        #print("Defaulting line:", block)
+        #print("Defaulting remainder:", remainder)
+        
+        if not _ or block[0] in (' ', '\t'):
+            #print("No separator or first character is whitespace.")
             return None
         
         if '(' in line:
             block, _, line = line.partition('(')
             idcls, _, line = line.partition(')')
-            if ' ' in idcls: return None
             classes, _, identifier = idcls.partition('#')
-            classes = array(classes)
+            classes = [i.strip() for i in classes.split()]
         
         if '{' in line:
             pre, _, line = line.partition('{')
             if not block: block = pre
-            elif pre: return None
+            elif pre:
+                #print("Exiting due to presence of { prefix.")
+                return None
             styles, _, line = line.partition('}')
             styles = array(styles, ';')
         
         if '[' in line:
             pre, _, line = line.partition('[')
             if not block: block = pre
-            elif pre: return None
+            elif pre:
+                #print("Exiting due to presence of [ prefix.")
+                return None
             language, _, line = line.partition(']')
         
-        if not block:
-            if ' ' in line or not line.isalpha():
-                return None
-            
-            block = line
+        if ' ' in block or not block.isalnum():
+            #print("Exiting due to space in block: {0!r}".format(block))
+            return None
         
         # level, _, remainder = line.rpartition('.')
         # 
@@ -372,7 +391,10 @@ class Parser(object):
                 for i, char in enumerate(source):
                     token = stack[-1] if stack else None
                     
+                    # if token: print("\tLooking for {0!r} at position {1} in {2!r}...".format(token.end, i, source))
                     if token and source.find(token.end) == i:
+                        # print("\tFound.")
+                        
                         if i > 0:
                             if source[i-1] == '\\':
                                 yield 'text', source[:i-2] + char
@@ -407,8 +429,8 @@ class Parser(object):
                         continue
                     
                     if i > 0:
-                        if source[i-1] == '\\':
-                            yield 'text', source[:i-1] + char
+                        if source[i-1] == '\\' or source[i-1] not in (' ', '\t'):
+                            yield 'text', source[:i] + char
                             source = source[i+1:]
                             break
                         
@@ -435,6 +457,7 @@ class Parser(object):
         stack = [tag.span(strip=True)]
         
         for action, value in tokenize(text):
+            # print("Tokenized: {0} {1!r}".format(action, value))
             if action == 'enter':
                 value = value()
                 stack[-1].children.append(value)
@@ -446,8 +469,7 @@ class Parser(object):
             elif action == 'attr':
                 name, value = value
                 if name == 'href':
-                    if value[0] not in ('#', '/') and '://' not in value:
-                        
+                    if value[0] not in ('#', '/') and ':' not in value:
                         value = self._get_link(value)
                 
                 stack[-1].attrs[name] = value
@@ -459,12 +481,13 @@ class Parser(object):
     
     def _get_link(self, name):
         def inner(context):
-            return self._links[name]
+            return self._links.get(name, '')
         
         return inner
     
     def _default(self, text, signature):
         node = getattr(tag, self._short.get(signature.block, signature.block))()
+        
         return node(
                 id_ = signature.id or None,
                 class_ = ' '.join(signature.classes) or None,
@@ -512,7 +535,7 @@ class Parser(object):
                 if stack: stack[-1][0].children.append(node)
                 stack.append((node, indentation))
             
-            stack[-1][0].children.append(tag.li[line])
+            stack[-1][0].children.append(tag.li[self._format(line)])
         
         return stack[0][0](id_=signature.id or None, class_=' '.join(signature.classes) or None, style='; '.join(signature.styles) or None)
     
@@ -530,9 +553,9 @@ class Parser(object):
         
         for line in chunk:
             if line[0] not in (' ', '\t'):
-                dl.children.append(tag.dt[line])
+                dl.children.append(tag.dt[self._format(line)])
             else:
-                dl.children.append(tag.dd[line.lstrip()])
+                dl.children.append(tag.dd[self._format(line.lstrip())])
         
         return dl
     
@@ -544,14 +567,17 @@ class Parser(object):
             )[ "\n".join(chunk) ]
     
     def code(self, chunk, signature):
+        signature.classes.insert(0, 'code')
         return self.pre(chunk, signature)
     
     def table(self, chunk, signature):
         return "TABLE"
     
     def link(self, chunk, signature):
-        name, _, link = chunk[0][1:].partition(']')
-        self._links[name] = link
+        for line in chunk:
+            name, _, link = line[1:].partition(']')
+            self._links[name] = link.strip()
+        
         return ""
     
     def flush(self, chunk, signature):
@@ -576,22 +602,13 @@ class Parser(object):
     
     def page(self, chunk, signature):
         return "\f"
-
-
-def main():
-    texting = Parser(open('../../test.text', 'r'))
-    print(texting.render())
     
-    with open('test.html', 'w') as fh:
-        fh.write(unicode(tag.html [
-                tag.head [
-                    tag.title [ "Texting Test" ]
-                ],
-                tag.body [
-                    list(texting())
-                ]
-            ]).encode('utf-8'))
-
-
-if __name__ == '__main__':
-    main()
+    def footnote(self, chunk, signature):
+        level, _, chunk[0] = chunk[0].partition('.')
+        
+        return tag.blockquote(
+                id_ = signature.id or level,
+                class_ = 'footnote' + (' ' + ' '.join(signature.classes) or ''),
+                style = '; '.join(signature.styles) or None,
+                rev = "footnote"
+            )[ [tag.label["Footnote " + level[2:]]] + [tag.p[self._format(i)] for i in chunk if i.strip()] ]
