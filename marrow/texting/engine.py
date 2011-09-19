@@ -69,6 +69,8 @@ class UnformattedToken(LongInlineToken):
             stream = stream[:end-1] + stream[end:]
             end -= 1
         
+        # print("\tSTREAM:", stream[end:])
+        # print('\tTEXT:', stream[:end])
         yield stream[end:]
         yield ('enter', self.tag())
         yield ('text', stream[:end])
@@ -88,16 +90,22 @@ class LinkToken(InlineToken):
     
     def exit(self, stream):
         linkbreak = string.ascii_letters + string.digits + '.-_:/@#'
+        l = len(stream)
         
         for i, c in enumerate(stream):
+            if i+1 < len(stream) and stream[i+1] not in linkbreak and c in ('.', ':', '@'):
+                yield stream[i:]
+                yield ('attr', ('href', stream[:i]))
+                break
+            
             if c not in linkbreak:
                 yield stream[i:]
                 yield ('attr', ('href', stream[:i]))
                 break
         
         else:
-            if stream[-1] == '.':
-                yield '.'
+            if stream[-1] in ('.', ':', '@'):
+                yield stream[-1]
                 yield ('attr', ('href', stream[:-1]))
             
             else:
@@ -397,17 +405,24 @@ class Parser(object):
                         
                         if i > 0:
                             if source[i-1] == '\\':
+                                # print("406:yielding:", source[:i])
+                                # print("407:source:", source[:i])
                                 yield 'text', source[:i-2] + char
                                 source = source[:i]
                                 break
                             
+                            # print("412:yielding:", source[:i])
+                            # print("413:source:", source[i:])
                             yield 'text', source[:i]
                             source = source[i:]
+                            break
                         
                         emitter = token.exit(source[len(token.end):])
                         source = emitter.next()
+                        # print("420:emitter:source:", source)
                         
                         for chunk in emitter:
+                            # print("422:chunk:", chunk)
                             if chunk[0] == 'enter':
                                 stack.append(token)
                             if chunk[0] == 'exit':
@@ -421,6 +436,7 @@ class Parser(object):
                         continue
                     
                     remainder = source if i == 0 else source[i:]
+                    # print("437:remainder:", remainder)
                     
                     for token in tokens[char]:
                         if token.validate(remainder):
@@ -429,18 +445,25 @@ class Parser(object):
                         continue
                     
                     if i > 0:
-                        if source[i-1] == '\\' or source[i-1] not in (' ', '\t'):
+                        if source[i-1] == '\\' or source[i-1] not in ' \t':
+                            # print("447:text:", source[:i] + char)
+                            # print("448:source:", source[i+1:])
                             yield 'text', source[:i] + char
                             source = source[i+1:]
                             break
                         
+                        # print("453:text:", source[:i])
+                        # print("454:source:", remainder)
                         yield 'text', source[:i]
                         source = remainder
+                        break
                     
                     emitter = token.enter(source[len(token.start):])
                     source = emitter.next()
+                    # print("460:source:", source)
                     
                     for chunk in emitter:
+                        # print("462:chunk:", chunk)
                         if chunk[0] == 'enter':
                             stack.append(token)
                         elif chunk[0] == 'exit':
@@ -450,7 +473,9 @@ class Parser(object):
                     
                     break
                 
-                if source and i == len(source) - 1:
+                else:
+                    # print("477:overrun:", source, i, len(source))
+                    # print("478:stack:", stack)
                     yield 'text', source
                     break
         
@@ -553,7 +578,7 @@ class Parser(object):
         
         for line in chunk:
             if line[0] not in (' ', '\t'):
-                dl.children.append(tag.dt[self._format(line)])
+                dl.children.append(tag.dt[self._format(line[:-1])])
             else:
                 dl.children.append(tag.dd[self._format(line.lstrip())])
         
