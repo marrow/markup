@@ -214,7 +214,7 @@ class Parser(object):
     
     def render(self, *args, **kw):
         root = tag.div(strip=True)
-        root.children = list(self(*args, **kw))
+        root.data = list(self(*args, **kw))
         return unicode(root)
     
     def __call__(self, *args, **kw):
@@ -485,7 +485,7 @@ class Parser(object):
             # print("Tokenized: {0} {1!r}".format(action, value))
             if action == 'enter':
                 value = value()
-                stack[-1].children.append(value)
+                stack[-1].data.append(value)
                 stack.append(value)
             
             elif action == 'exit':
@@ -500,7 +500,7 @@ class Parser(object):
                 stack[-1].attrs[name] = value
             
             else:
-                stack[-1].children.append(value)
+                stack[-1].data.append(value)
         
         return stack[0]
     
@@ -526,7 +526,7 @@ class Parser(object):
         
         for line in chunk:
             if line.lstrip()[0] not in ('#', '*', '-', ':'):
-                stack[-1].children[-1].children.append(line)
+                stack[-1].data[-1].data.append(line)
             
             if line[0] in (' ', '\t'):
                 # Determine indentation level.
@@ -534,7 +534,7 @@ class Parser(object):
                 
                 if level > indentation:
                     node = parent()
-                    if stack: stack[-1][0].children.append(node)
+                    if stack: stack[-1][0].data.append(node)
                     stack.append((node, level))
                 
                 elif level < indentation:
@@ -557,10 +557,10 @@ class Parser(object):
             
             if len(symbols) > len(stack):
                 node = parent()
-                if stack: stack[-1][0].children.append(node)
+                if stack: stack[-1][0].data.append(node)
                 stack.append((node, indentation))
             
-            stack[-1][0].children.append(tag.li[self._format(line)])
+            stack[-1][0].data.append(tag.li[self._format(line)])
         
         return stack[0][0](id_=signature.id or None, class_=' '.join(signature.classes) or None, style='; '.join(signature.styles) or None)
     
@@ -578,9 +578,9 @@ class Parser(object):
         
         for line in chunk:
             if line[0] not in (' ', '\t'):
-                dl.children.append(tag.dt[self._format(line[:-1])])
+                dl.data.append(tag.dt[self._format(line[:-1])])
             else:
-                dl.children.append(tag.dd[self._format(line.lstrip())])
+                dl.data.append(tag.dd[self._format(line.lstrip())])
         
         return dl
     
